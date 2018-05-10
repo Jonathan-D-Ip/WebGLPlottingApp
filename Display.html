@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+
+	<head>
+		<meta charset="utf8">
+		<style>
+
+		html, body, canvas {
+			margin: 0px;
+			outline: none;
+			border: none;
+			padding: 0px;
+			width: 100%;
+			height: 100%;
+			overflow: hidden;
+		}
+
+	</style>
+
+	</head>
+
+	<body>
+
+		<canvas id="c"></canvas>
+		<script src="./twgl-full.min.js"></script>
+		<script src="./Stats.js"></script>
+		<script id="grid_vs" type="notjs">
+				precision mediump float;
+				attribute vec3 position;
+				uniform mat4 u_rot;
+				uniform mat4 u_viewProjection;
+				varying vec3 pos;
+				void main(){
+					pos = position;
+					gl_Position = u_viewProjection * u_rot * vec4(position, 1.);
+				}
+		</script>
+		<script id="grid_fs" type="notjs">
+			precision highp float;
+			varying vec3 pos;
+			uniform float u_size;
+			uniform float u_scale;
+
+			float my_fmod(float inp_val, float inp_m) {
+				float m = inp_m;
+				float val = inp_val + 201.0 * m;
+				return abs(val - float(int(val/m)) * m);
+			}
+
+			float gridline(float nPos0, float nPos1, float fac, float very_small_number) {
+				if ( my_fmod(nPos0, 1./fac) < very_small_number || my_fmod(nPos1, 1./fac) < very_small_number) return 1.0;
+				return 0.0;
+			}
+
+			void main() {
+
+				float very_small_number = 0.015 / u_scale;
+				float size = u_size;
+				vec3 nPos = pos / u_scale;
+
+				vec3 color = vec3(0.,0.,0.5);
+				float sqrt5 = 2.236068;
+
+				gl_FragColor = vec4(0.,0.,0.,1.);	
+
+				float n = 5.;
+				float sLine = 1.;
+				float t1 = 1.;
+				float t2 = 1.;
+
+				if (pos.x == -size || pos.x == size) {
+					if (gridline(nPos.y, nPos.z, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t1;
+					if (gridline(nPos.y*n, nPos.z*n, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t2;
+				} else if (pos.y == -size || pos.y == size) {
+					if (gridline(nPos.x, nPos.z, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t1;
+					if (gridline(nPos.x*n, nPos.z*n, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t2;
+				} else if (pos.z == -size || pos.z == size) {
+					if (gridline(nPos.x, nPos.y, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t1;
+					if (gridline(nPos.x*n, nPos.y*n, n, very_small_number) > 0.5) gl_FragColor.xyz += color * t2;
+				}
+			}
+		</script>
+		<script id="axis_vs" type="notjs">
+			precision mediump float;
+			attribute vec3 position;
+			uniform mat4 u_rot;
+			uniform mat4 u_viewProjection;
+			varying vec3 v_pos;
+			void main() {
+				v_pos = position;
+				gl_Position = u_viewProjection * u_rot * vec4(position, 1.);
+			}
+		</script>
+		<script id="axis_fs" type="notjs">
+			precision mediump float;
+			varying vec3 v_pos;
+			void main() {
+				float _x = v_pos.x != 0. ? 1. : 0.;
+				float _y = v_pos.y != 0. ? 1. : 0.;
+				float _z = v_pos.z != 0. ? 1. : 0.;
+				gl_FragColor = vec4( _x, _y, _z, 1.);
+			}
+		</script>
+		<script id="point_vs" type="notjs">
+			precision highp float;
+			attribute vec3 position;
+			uniform mat4 u_rot;
+			uniform mat4 u_viewProjection;
+			uniform float u_scale;
+			varying vec3 pos;
+			void main() {
+				gl_PointSize = 2.0;
+				pos = position*u_scale;
+				gl_Position = u_viewProjection * u_rot * vec4(position*u_scale, 1.0);
+			}
+		</script>
+		<script id="point_fs" type="notjs">
+			precision highp float;
+			varying vec3 pos; 
+			uniform float u_size;
+			void main() {
+				if (
+					pos.x >  u_size || pos.y >  u_size || pos.z >  u_size ||
+					pos.x < -u_size || pos.y < -u_size || pos.z < -u_size
+				) gl_FragColor.a = .0;
+				else gl_FragColor.a = 1.;
+				gl_FragColor.xyz = vec3(1.,1.,1.);
+			}
+		</script>
+		<script>
+
+			'use strict';
+			var stats = new Stats();
+			stats.showPanel( 1 ); // 0: fps, 1: ms, 2: mb, 3+: custom
+			document.body.appendChild( stats.dom );
+
+			const canvas = document.getElementById("c");
+			const gl = canvas.getContext("webgl");
+			const m4 = twgl.m4;
+
+			const grid_programInfo = twgl.createProgramInfo(gl, ["grid_vs", "grid_fs"]);
+			const axis_programInfo = twgl.createProgramInfo(gl, ["axis_vs", "axis_fs"]);
+			const point_programInfo = twgl.createProgramInfo(gl, ["point_vs", "point_fs"]);
+
+			const size = 1.0;
+			const grid_bufferInfo = twgl.primitives.createCubeBufferInfo(gl, size*2);
+			const axis_bufferInfo = twgl.createBufferInfoFromArrays(gl, {
+				position: { numComponents: 3, data: [0, -size, 0, 0, size, 0, size, 0, 0, -size, 0, 0, 0,0,size,0,0,-size], },
+			});
+
+			const lorenz = new Float32Array(1024*16*3);
+			{
+				const s = 10;
+				const r = 28;
+				const b = 8/3;
+				const dt = 0.005;
+				let dx = 0;
+				let dy = 0;
+				let dz = 0;
+				const scale_lor = 0.02;
+
+				lorenz[0] = 1;
+				lorenz[1] = 1;
+				lorenz[2] = 1;
+
+				for (let i = 3; i < lorenz.length; i+=3) {
+					lorenz[i  ] = lorenz[i-3] + dx * dt;
+					lorenz[i+1] = lorenz[i-2] + dy * dt;
+					lorenz[i+2] = lorenz[i-1] + dz * dt;
+					dx = s * ( lorenz[i+1] - lorenz[i  ] );
+					dy = lorenz[i  ] * (r - lorenz[i+2]) - lorenz[i+1];
+					dz = lorenz[i  ] * lorenz[i+1] - b * lorenz[i+2];
+				}
+				for (let i = 0; i < lorenz.length; i++) lorenz[i] *= scale_lor; 
+			}
+
+			const point_bufferInfo = twgl.createBufferInfoFromArrays(gl, {
+				position: { numComponents: 3, data: lorenz, },
+			});
+
+			//mouse events
+			const AMORTIZATION = 0.95;
+			var drag = false;
+			var old_x, old_y;
+			var dX = 0, dY = 0;
+			var time_old = 0;
+			var THETA = 0;
+			var PHI = 0;
+
+			canvas.addEventListener("mousedown", function(e) {
+				drag = true;
+				old_x = e.pageX, old_y = e.pageY;
+				e.preventDefault();
+				return false;
+			}, false);
+
+			canvas.addEventListener("mouseup", function(e){
+				drag = false;
+			}, false);
+
+			canvas.addEventListener("mouseout", function(e){
+				drag = false;
+			}, false);
+
+			canvas.addEventListener("mousemove", function(e) {
+				if (!drag) return false;
+				dX = (e.pageX-old_x)*2*Math.PI/canvas.width,
+				dY = (e.pageY-old_y)*2*Math.PI/canvas.height;
+				THETA+= dX;
+//				PHI+=dY;
+				old_x = e.pageX, old_y = e.pageY;
+				e.preventDefault();
+			}, false);
+
+			const fov = 30 * Math.PI / 180;
+			var aspect = gl.canvas.clientWidth / gl.canvas.clientHeight;
+			const zNear = 0.5;
+			const zFar = 10;
+			var projection = m4.perspective(fov, aspect, zNear, zFar);
+			const eye = [1, 4, -6];
+			const target = [0, 0, 0];
+			const up = [0, 1, 0];
+			var scale = 1.;
+
+			canvas.addEventListener("wheel", function(e){
+				if ( e.deltaY < 0 ) scale *= 1.03;
+				else scale *= 0.97
+			});
+
+			const camera = m4.lookAt(eye, target, up);
+			const view = m4.inverse(camera);
+			var viewProjection = m4.multiply(projection, view);
+
+			const grid_uniforms = {
+				u_viewProjection: viewProjection,
+				u_resolution: [gl.canvas.width, gl.canvas.height],
+				u_size: size,
+			}
+
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+			gl.enable(gl.DEPTH_TEST);
+			gl.enable(gl.CULL_FACE);
+			gl.enable(gl.BLEND);
+			gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+			gl.clearColor(0., 0., 0., 1);
+			gl.clearDepth(1.0);
+
+			function render(time) {
+				stats.begin();
+
+				if (twgl.resizeCanvasToDisplaySize(gl.canvas)) {
+					grid_uniforms.resolution = [gl.canvas.width, gl.canvas.height];
+					aspect = gl.canvas.clientWidth / gl.canvas.clientHeight;
+					projection = m4.perspective(fov, aspect, zNear, zFar);
+					viewProjection = m4.multiply(projection, view);
+					grid_uniforms.u_viewProjection = viewProjection;
+					gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+				};
+				
+				gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+				let dt = time-time_old;
+
+				if (!drag) {
+					dX *= AMORTIZATION;
+					THETA+=dX/2;
+				}
+
+				let u_rot = m4.identity()
+				u_rot = m4.rotateY(u_rot, THETA);
+				u_rot = m4.rotateX(u_rot, PHI);
+
+				grid_uniforms.u_rot = u_rot;
+				grid_uniforms.u_scale = scale;
+
+				gl.useProgram(grid_programInfo.program);
+				twgl.setBuffersAndAttributes(gl, grid_programInfo, grid_bufferInfo);
+				twgl.setUniforms(grid_programInfo, grid_uniforms);
+				gl.cullFace(gl.FRONT);
+				twgl.drawBufferInfo(gl, grid_bufferInfo)
+				gl.cullFace(gl.BACK);
+
+				gl.useProgram(axis_programInfo.program);
+				twgl.setBuffersAndAttributes(gl, axis_programInfo, axis_bufferInfo);
+				twgl.setUniforms(axis_programInfo, grid_uniforms);				
+				twgl.drawBufferInfo(gl, axis_bufferInfo, gl.LINES)
+
+				gl.useProgram(point_programInfo.program);
+				twgl.setBuffersAndAttributes(gl, point_programInfo, point_bufferInfo);
+				twgl.setUniforms(point_programInfo, grid_uniforms);				
+				twgl.drawBufferInfo(gl, point_bufferInfo, gl.POINTS);
+
+				stats.end();
+				requestAnimationFrame(render);
+			}
+
+			requestAnimationFrame(render);
+		</script>
+
+	</body>
+
+</html>
